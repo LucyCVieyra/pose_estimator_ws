@@ -1,0 +1,5 @@
+sim_environment:
+  sim_repo_path: ""
+  px4_repo_path: ""
+  world_name: ""
+  simple_world_name: ""
