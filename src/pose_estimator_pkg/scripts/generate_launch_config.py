@@ -1,92 +1,135 @@
 #!/usr/bin/env python3
-"""Generate launch_config.yaml with local simulator and PX4 paths."""
+"""Generate launch_config.yaml with the settings needed to run the simulation.
+
+It asks for:
+  * the path of the simulation repository (pose_estimator_sim),
+  * the path of the PX4-Autopilot repository,
+  * the Gazebo world to load (cats_world or tugbot_depot).
+
+Every value can also be passed on the command line to skip the questions:
+
+    python3 scripts/generate_launch_config.py \
+        --sim-repo ~/pose_estimator_sim --px4-repo ~/PX4-Autopilot --world tugbot_depot
+
+After generating the file, rebuild the package so the installed copy is updated:
+
+    cd ~/pose_estimator_ws && colcon build --packages-select pose_estimator_pkg
+"""
 
 import argparse
 import json
+import sys
 from pathlib import Path
-
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
+# Reuse the list of worlds defined in the package so both files stay in sync.
+sys.path.insert(0, str(PACKAGE_ROOT))
+from pose_estimator_pkg.launch_config import DEFAULT_WORLD, WORLDS  # noqa: E402
+
 
 def _ask_path(label: str, default: str) -> Path:
-    """Prompt for a path and ensure it points to an existing directory."""
+    """Ask for a directory path until an existing one is given."""
     while True:
         answer = input(f"{label} [{default}]: ").strip() or default
         path = Path(answer).expanduser().resolve()
         if path.is_dir():
             return path
-        print(f"No existe el directorio: {path}")
+        print(f"  Directory not found: {path}")
 
 
-def _ask_world(label: str, default: str, sim_repo: Path) -> str:
-    """Prompt for an SDF filename and ensure it exists in the simulator repo."""
+def _ask_world(default: str) -> str:
+    """Show the available worlds and ask the user to pick one."""
+    names = list(WORLDS)
+    print("\nAvailable Gazebo worlds:")
+    for index, name in enumerate(names, start=1):
+        print(f"  {chr(ord('a') + index - 1)}) {name:<14} {WORLDS[name]['description']}")
+
+    default_letter = chr(ord("a") + names.index(default))
     while True:
-        answer = input(f"{label} [{default}]: ").strip() or default
-        world_path = Path(answer).expanduser()
-        if not world_path.is_absolute():
-            world_path = sim_repo / world_path
-        if world_path.is_file():
+        answer = input(f"Select a world [{default_letter}]: ").strip().lower() or default_letter
+        # Accept the letter (a/b), the number (1/2) or the full world name.
+        if answer in names:
             return answer
-        print(f"No existe el archivo de mundo: {world_path}")
+        if len(answer) == 1 and "a" <= answer < chr(ord("a") + len(names)):
+            return names[ord(answer) - ord("a")]
+        if answer.isdigit() and 1 <= int(answer) <= len(names):
+            return names[int(answer) - 1]
+        print(f"  Invalid option: {answer!r}")
+
+
+def _world_file(sim_repo: Path, world: str) -> Path:
+    return sim_repo / WORLDS[world]["folder"] / WORLDS[world]["sdf"]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Genera launch_config.yaml para los launch de ROS 2."
+        description="Generate launch_config.yaml for the pose_estimator_pkg launch files."
     )
-    parser.add_argument("--sim-repo", help="Ruta del repositorio de simulación")
-    parser.add_argument("--px4-repo", help="Ruta del repositorio PX4-Autopilot")
-    parser.add_argument("--world", help="Mundo SDF usado por los launch generales")
-    parser.add_argument(
-        "--simple-world", help="Mundo SDF usado por simple_launch.launch.py"
-    )
+    parser.add_argument("--sim-repo", help="Path of the simulation repository (pose_estimator_sim)")
+    parser.add_argument("--px4-repo", help="Path of the PX4-Autopilot repository")
+    parser.add_argument("--world", choices=list(WORLDS), help="Gazebo world to load")
     parser.add_argument(
         "--output",
         type=Path,
         default=PACKAGE_ROOT / "launch_config.yaml",
-        help="Archivo YAML de salida (por defecto: launch_config.yaml del paquete)",
+        help="Output YAML file (default: launch_config.yaml in the package root)",
     )
     args = parser.parse_args()
 
+    # --- Repositories ---
     sim_repo = (
         Path(args.sim_repo).expanduser().resolve()
         if args.sim_repo
-        else _ask_path("Repositorio de simulación", "~/cats_sim")
+        else _ask_path("Simulation repository", "~/pose_estimator_sim")
     )
     px4_repo = (
         Path(args.px4_repo).expanduser().resolve()
         if args.px4_repo
-        else _ask_path("Repositorio PX4-Autopilot", "~/PX4-Autopilot")
+        else _ask_path("PX4-Autopilot repository", "~/PX4-Autopilot")
     )
-    for label, path in (("simulación", sim_repo), ("PX4", px4_repo)):
+    for label, path in (("simulation", sim_repo), ("PX4", px4_repo)):
         if not path.is_dir():
-            parser.error(f"No existe el directorio de {label}: {path}")
+            parser.error(f"The {label} directory does not exist: {path}")
 
-    world_name = args.world or _ask_world("Mundo SDF", "cats_world.sdf", sim_repo)
-    simple_world_name = args.simple_world or _ask_world(
-        "Mundo SDF simple", "cats_no_collision.sdf", sim_repo
-    )
-    worlds = (("--world", world_name), ("--simple-world", simple_world_name))
-    for label, name in worlds:
-        world_path = Path(name).expanduser()
-        if not world_path.is_absolute():
-            world_path = sim_repo / world_path
-        if not world_path.is_file():
-            parser.error(f"El archivo indicado por {label} no existe: {world_path}")
+    # --- World ---
+    while True:
+        world = args.world or _ask_world(DEFAULT_WORLD)
+        world_file = _world_file(sim_repo, world)
+        if world_file.is_file():
+            break
+        if args.world:
+            parser.error(f"World file not found for '{world}': {world_file}")
+        print(f"  World file not found for '{world}': {world_file}")
 
+    # --- Write YAML ---
     output = args.output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
+        "# Generated by scripts/generate_launch_config.py\n"
         "sim_environment:\n"
         f"  sim_repo_path: {json.dumps(str(sim_repo))}\n"
         f"  px4_repo_path: {json.dumps(str(px4_repo))}\n"
-        f"  world_name: {json.dumps(world_name)}\n"
-        f"  simple_world_name: {json.dumps(simple_world_name)}\n",
+        f"  # Gazebo world. Options: {', '.join(WORLDS)}\n"
+        f"  world: {json.dumps(world)}\n",
         encoding="utf-8",
     )
-    print(f"Configuración guardada en: {output}")
-    print("Ahora reconstruye el paquete para instalar el YAML actualizado.")
+
+    print(f"\nConfiguration saved to: {output}")
+    print(f"  World: {world} ({world_file})")
+
+    # PX4 always spawns the x500 stored in its own models folder, so it has to
+    # match the selected world (sensors + spawn pose).
+    expected_model = world_file.parent / "x500" / "model.sdf"
+    px4_model = px4_repo / "Tools/simulation/gz/models/x500/model.sdf"
+    if expected_model.is_file() and (
+        not px4_model.is_file() or expected_model.read_bytes() != px4_model.read_bytes()
+    ):
+        print("\nNOTE: the x500 model installed in PX4 does not match this world. Run:")
+        print(f"  cp {expected_model} {px4_model}")
+
+    print("\nNow rebuild the package to install the updated YAML:")
+    print("  cd ~/pose_estimator_ws && colcon build --packages-select pose_estimator_pkg")
 
 
 if __name__ == "__main__":
