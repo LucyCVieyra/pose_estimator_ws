@@ -204,7 +204,7 @@ class PX4Driver(Node):
         msg.source_system = 1
         msg.source_component = 1
         msg.from_external = True
-        msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+        msg.timestamp = 0  # 0 -> PX4 stamps it on arrival (avoids timesync drift)
         self.vehicle_command_publisher.publish(msg)
 
     # Arm vehicle
@@ -327,11 +327,11 @@ class PX4Driver(Node):
         msg.acceleration = False
         msg.attitude = False
         msg.body_rate = False
-        msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+        msg.timestamp = 0  # 0 -> PX4 stamps it on arrival (avoids timesync drift)
         self.offboard_control_mode_publisher.publish(msg)
 
         # Publish setpoint
-        self.current_setpoint.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+        self.current_setpoint.timestamp = 0  # 0 -> PX4 stamps it on arrival
         self.trajectory_setpoint_publisher.publish(self.current_setpoint)
 
         # Handle takeoff
